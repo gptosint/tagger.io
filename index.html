@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Map Tagger</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .controls { position: absolute; top: 10px; right: 10px; z-index: 1000; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="controls">
+    <button id="clear">Clear Tags</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    const map = L.map('map').setView([0, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const markers = [];
+
+    async function loadTags() {
+      const res = await fetch('/api/tags');
+      const data = await res.json();
+      markers.forEach(m => m.remove());
+      data.forEach(tag => {
+        const marker = L.marker([tag.lat, tag.lng]).addTo(map).bindPopup(tag.text);
+        markers.push(marker);
+      });
+    }
+
+    map.on('click', async (e) => {
+      const text = prompt('Enter tag text:');
+      if (!text) return;
+      await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: e.latlng.lat, lng: e.latlng.lng, text })
+      });
+      loadTags();
+    });
+
+    document.getElementById('clear').addEventListener('click', async () => {
+      if (!confirm('Delete all tags?')) return;
+      await fetch('/api/tags', { method: 'DELETE' });
+      loadTags();
+    });
+
+    loadTags();
+  </script>
+</body>
+</html>
