@@ -66,7 +66,8 @@ test('POST /api/tags stores a sanitized tag and returns success', async () => {
 
     assert.strictEqual(postResponse.status, 200);
     const body = await postResponse.json();
-    assert.deepStrictEqual(body, { success: true });
+    assert.strictEqual(body.success, true);
+    assert.ok(body.tag);
 
     const getResponse = await fetch(`${baseUrl}/api/tags`);
     const tags = await getResponse.json();
@@ -77,6 +78,43 @@ test('POST /api/tags stores a sanitized tag and returns success', async () => {
     assert.strictEqual(tag.userId, 'example-user');
     assert.strictEqual(tag.lat, payload.lat);
     assert.strictEqual(tag.lng, payload.lng);
+    assert.ok(typeof tag.timestamp === 'number');
+  });
+});
+
+test('Legacy routes expose the same tag data contract', async () => {
+  await withServer(async (baseUrl) => {
+    const getResponse = await fetch(`${baseUrl}/api/recording`);
+    assert.strictEqual(getResponse.status, 200);
+    const initial = await getResponse.json();
+    assert.deepStrictEqual(initial, { tags: [] });
+
+    const form = new FormData();
+    form.append('file', new Blob(['Legacy text sample'], { type: 'text/plain' }), 'tag.txt');
+    form.append('latitude', '10.25');
+    form.append('longitude', '-20.75');
+    form.append('userId', ' legacy-user ');
+
+    const postResponse = await fetch(`${baseUrl}/api/recording`, {
+      method: 'POST',
+      body: form,
+    });
+
+    assert.strictEqual(postResponse.status, 200);
+    const body = await postResponse.json();
+    assert.strictEqual(body.success, true);
+    assert.ok(body.tag);
+
+    const tagsResponse = await fetch(`${baseUrl}/api/recording`);
+    const payload = await tagsResponse.json();
+
+    assert.strictEqual(Array.isArray(payload.tags), true);
+    assert.strictEqual(payload.tags.length, 1);
+    const tag = payload.tags[0];
+    assert.strictEqual(tag.text, 'Legacy text sample');
+    assert.strictEqual(tag.userId, 'legacy-user');
+    assert.strictEqual(tag.lat, 10.25);
+    assert.strictEqual(tag.lng, -20.75);
     assert.ok(typeof tag.timestamp === 'number');
   });
 });

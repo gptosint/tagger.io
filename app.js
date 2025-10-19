@@ -3,10 +3,14 @@ const MAPBOX_ACCESS_TOKEN = "pk.eyJ1IjoiaHViaWdhZ2EiLCJhIjoiY21lZW1yNXk2MGVuZzJu
 
 mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
 const API_BASE_URL = '/api';
+const TAGS_ENDPOINT = `${API_BASE_URL}/tags`;
+const LEGACY_ENDPOINT = `${API_BASE_URL}/recording`;
+
 const textTags = []; // holds thread objects
 const tagMarkers = [];
 const userColors = new Map();
 const USER_COLOR_PALETTE = ['#FF2D95', '#7A5CFF', '#00F0FF', '#FFD166', '#06D6A0', '#EF476F'];
+
 let map = null;
 let currentUserId = null;
 let currentPosition = null;
@@ -29,9 +33,135 @@ function initWebSocket(){socket={send:d=>console.log('WebSocket message sent:',d
 function initGeolocation(){if(navigator.geolocation){navigator.geolocation.getCurrentPosition(p=>{initMap(p.coords.latitude,p.coords.longitude);updateUserPosition(p);navigator.geolocation.watchPosition(updateUserPosition);},()=>{showError('Location access denied.');initMap(0,0);});}else{showError('Geolocation unsupported.');initMap(0,0);}}
 function initMap(lat,lon){map=new mapboxgl.Map({container:'map',style:'mapbox://styles/hubigaga/clre95zh8008s01pfeg2j2dpo',center:[lon,lat],zoom:15});map.addControl(new mapboxgl.NavigationControl());map.on('load',()=>{isMapInitialized=true;addUserMarker(lat,lon);updateTagsList();});}
 function updateUserPosition(p){const{latitude:lat,longitude:lon}=p.coords;currentPosition={latitude:lat,longitude:lon};document.getElementById('current-location').textContent=`Your position: ${lat.toFixed(5)}, ${lon.toFixed(5)}`;if(currentUserMarker){currentUserMarker.setLngLat([lon,lat]);}else if(isMapInitialized){addUserMarker(lat,lon);}}
-function fetchTagsFromBackend(){isLoadingTags=true;const loadingIndicator=document.getElementById('loading-indicator');const noTagsMessage=document.getElementById('no-tags-message');if(loadingIndicator)loadingIndicator.style.display='flex';if(noTagsMessage)noTagsMessage.style.display='none';fetch(`${API_BASE_URL}/tags`).then(res=>{if(!res.ok)throw new Error('Failed to load tags');return res.json();}).then(data=>{const incoming=Array.isArray(data)?data:[];textTags.length=0;textTags.push(...incoming.map(tag=>({latitude:Number(tag.lat),longitude:Number(tag.lng),text:String(tag.text||'').trim(),timestamp:tag.timestamp||Date.now(),userId:sanitizeUserId(tag.userId)})).filter(tag=>!Number.isNaN(tag.latitude)&&!Number.isNaN(tag.longitude)&&tag.text));resetLegendColors();updateTagsCount();updateTagsList();updateLegend();}).catch(()=>{showError('Failed to load tags');}).finally(()=>{isLoadingTags=false;if(loadingIndicator)loadingIndicator.style.display='none';if(textTags.length===0&&noTagsMessage){noTagsMessage.style.display='block';}updateLegend();});}
+async function fetchTagsFromBackend(){
+  isLoadingTags=true;
+  const loadingIndicator=document.getElementById('loading-indicator');
+  const noTagsMessage=document.getElementById('no-tags-message');
+  if(loadingIndicator)loadingIndicator.style.display='flex';
+  if(noTagsMessage)noTagsMessage.style.display='none';
+
+  try{
+    const data=await loadTagsWithFallback();
+    textTags.length=0;
+    textTags.push(...data);
+    resetLegendColors();
+    updateTagsCount();
+    updateTagsList();
+    updateLegend();
+  }catch(err){
+    console.error(err);
+    showError('Failed to load tags');
+  }finally{
+    isLoadingTags=false;
+    if(loadingIndicator)loadingIndicator.style.display='none';
+    if(textTags.length===0&&noTagsMessage){
+      noTagsMessage.style.display='block';
+    }
+    updateLegend();
+  }
+}
 function addTextTag(){if(!currentPosition){showError('Wait for location.');return;}const area=document.getElementById('tag-text');const text=area.value.trim();if(!text){showError('Enter text.');return;}const sanitizedUserId=sanitizeUserId(currentUserId);const tag={userId:sanitizedUserId,latitude:currentPosition.latitude,longitude:currentPosition.longitude,text,timestamp:Date.now()};textTags.push(tag);updateTagsCount();updateTagsList();updateLegend();area.value='';showSuccess('Tag added!');uploadTagToBackend(tag);}
-function uploadTagToBackend(tag){fetch(`${API_BASE_URL}/tags`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:tag.latitude,lng:tag.longitude,text:tag.text,userId:tag.userId})}).then(res=>{if(!res.ok)throw new Error('Request failed');return res.json();}).then(data=>{if(data&&data.success){showSuccess('Tag saved!');}else{showError('Failed to save tag');}}).catch(()=>{showError('Failed to save tag');});}
+async function uploadTagToBackend(tag){
+  try{
+    await postTagJson(tag);
+    showSuccess('Tag saved!');
+  }catch(err){
+    console.warn('JSON upload failed, trying legacy route',err);
+    try{
+      await postTagLegacy(tag);
+      showSuccess('Tag saved!');
+    }catch(legacyErr){
+      console.error(legacyErr);
+      showError('Failed to save tag');
+    }
+  }
+}
+
+async function loadTagsWithFallback(){
+  try{
+    const response=await fetch(TAGS_ENDPOINT);
+    if(!response.ok){
+      throw new Error(`Failed to load ${TAGS_ENDPOINT}`);
+    }
+    const payload=await response.json();
+    const tags=Array.isArray(payload)?payload:[];
+    return sanitizeIncomingTags(tags);
+  }catch(primaryError){
+    console.warn('Primary tag endpoint failed, checking legacy route',primaryError);
+    const response=await fetch(LEGACY_ENDPOINT);
+    if(!response.ok){
+      throw new Error(`Failed to load ${LEGACY_ENDPOINT}`);
+    }
+    const payload=await response.json();
+    const tags=Array.isArray(payload)?payload:Array.isArray(payload.tags)?payload.tags:[];
+    return sanitizeIncomingTags(tags);
+  }
+}
+
+function sanitizeIncomingTags(rawTags){
+  return rawTags.map(tag=>{
+    const latValue=tag.lat ?? tag.latitude;
+    const lngValue=tag.lng ?? tag.longitude;
+    const textValue=typeof tag.text==='string'?tag.text:String(tag.text||'');
+    const timestampValue=typeof tag.timestamp==='number'?tag.timestamp:Date.now();
+    return {
+      latitude:Number(latValue),
+      longitude:Number(lngValue),
+      text:textValue.trim(),
+      timestamp:timestampValue,
+      userId:sanitizeUserId(tag.userId),
+    };
+  }).filter(tag=>!Number.isNaN(tag.latitude)&&!Number.isNaN(tag.longitude)&&tag.text);
+}
+
+async function postTagJson(tag){
+  const response=await fetch(TAGS_ENDPOINT,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      lat:tag.latitude,
+      lng:tag.longitude,
+      text:tag.text,
+      userId:tag.userId,
+    }),
+  });
+
+  if(!response.ok){
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+
+  const payload=await response.json();
+  if(!payload||payload.success!==true){
+    throw new Error('Tag save was not successful');
+  }
+
+  return payload;
+}
+
+async function postTagLegacy(tag){
+  const form=new FormData();
+  form.append('file',new Blob([tag.text],{type:'text/plain'}),`tag_${tag.latitude}_${tag.longitude}_${tag.timestamp}.txt`);
+  form.append('latitude',String(tag.latitude));
+  form.append('longitude',String(tag.longitude));
+  form.append('timestamp',String(tag.timestamp));
+  form.append('userId',tag.userId);
+
+  const response=await fetch(LEGACY_ENDPOINT,{
+    method:'POST',
+    body:form,
+  });
+
+  if(!response.ok){
+    throw new Error(`Legacy request failed with status ${response.status}`);
+  }
+
+  const payload=await response.json();
+  if(!payload||payload.success!==true){
+    throw new Error('Legacy tag save was not successful');
+  }
+
+  return payload;
+}
 function updateTagsCount(){const el=document.getElementById('tags-count');const c=textTags.length;el.textContent=c===0?'No text tags yet':`${c} total tag${c===1?'':'s'}`;}
 function updateTagsList(){const itemsContainer=document.getElementById('tags-items');if(!itemsContainer)return;itemsContainer.innerHTML='';clearTagMarkers();const noTagsMessage=document.getElementById('no-tags-message');if(textTags.length===0){if(noTagsMessage)noTagsMessage.style.display='block';return;}if(noTagsMessage)noTagsMessage.style.display='none';textTags.forEach(tag=>{const color=getColorForUser(tag.userId);const item=document.createElement('div');item.className='tag-item py-2 px-3 mb-1 rounded flex items-center';item.innerHTML=`<span class="user-dot" style="background:${color}"></span><span>${tag.text}</span><span class="ml-auto text-gray-400 text-xs">${tag.latitude.toFixed(3)}, ${tag.longitude.toFixed(3)}</span>`;item.onclick=()=>{if(map){map.flyTo({center:[tag.longitude,tag.latitude],zoom:15});}};itemsContainer.appendChild(item);addTextMarker(tag,color);});}
 function clearTagMarkers(){while(tagMarkers.length){const marker=tagMarkers.pop();marker.remove();}}
