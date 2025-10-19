@@ -1,40 +1,90 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    ...
-    <!-- (All head content unchanged) -->
-    ...
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geo-Text Tags Globe</title>
+
+    <!-- Mapbox GL JS -->
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.11.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.11.0/mapbox-gl.js"></script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            if (window.tailwind) {
+                tailwind.config = {
+                    darkMode: 'class',
+                    theme: {
+                        extend: {
+                            colors: { primary: '#FF2D95' }
+                        }
+                    }
+                };
+            }
+        });
+    </script>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body class="font-sans antialiased">
-    ...
-<script>
-    // (All script content unchanged until addTextMarker)
-
-    // UPDATED: Always show tag text beside marker dot
-    function addTextMarker(tag){
-        if(!map||!isMapInitialized)return;
-        // Marker dot
-        const el=document.createElement('div');
-        el.className='marker-dot';
-        // Text label
-        const label=document.createElement('div');
-        label.className='mapboxgl-marker-text';
-        label.style.marginTop='4px';
-        label.textContent=tag.text;
-
-        // Combine marker and label inside a container
-        const container=document.createElement('div');
-        container.style.display='flex';
-        container.style.flexDirection='column';
-        container.style.alignItems='center';
-        container.appendChild(el);
-        container.appendChild(label);
-
-        // Add to map
-        new mapboxgl.Marker(container)
-            .setLngLat([tag.longitude,tag.latitude])
-            .addTo(map);
-    }
-</script>
+    <div class="min-h-screen flex flex-col">
+        <header class="text-white p-4 shadow-md">
+            <h1 class="text-xl font-bold text-center">Geo-Text Tags Globe</h1>
+        </header>
+        <main class="flex-grow flex flex-col">
+            <div id="error-container" class="alert mx-4 mt-2">
+                <p id="error-message"></p>
+            </div>
+            <div id="success-container" class="success mx-4 mt-2">
+                <p id="success-message"></p>
+            </div>
+            <div id="loading" style="display: none;">
+                <div class="spinner mr-2"></div>
+                <div>Loading map...</div>
+            </div>
+            <div id="map" class="rounded-lg overflow-hidden shadow-inner relative mx-4 mt-4">
+                <button id="globe-toggle">
+                    <span id="globe-text">Enable Globe</span>
+                </button>
+                <div id="map-legend" class="legend">
+                    <div class="legend-title mb-2 font-semibold">Users & Tags</div>
+                    <div id="legend-content">
+                        <div class="legend-item">
+                            <div class="spinner mr-2"></div>
+                            <span>Loading users...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="p-4">
+                <div id="location-info" class="mb-4 info-panel p-3 rounded-lg shadow-md">
+                    <p id="current-location" class="text-sm">Waiting for location...</p>
+                    <p id="tags-count" class="text-sm mt-1">No text tags yet</p>
+                </div>
+                <div class="flex flex-col gap-4 mb-4">
+                    <textarea id="tag-text" rows="3" placeholder="Enter your text tag here..." class="mb-2"></textarea>
+                    <button id="add-tag-btn" class="btn-primary py-3 px-4 rounded-lg shadow font-medium transition-all">
+                        Add Text Tag to Map
+                    </button>
+                </div>
+                <div class="tags-list-container p-3 rounded-lg shadow-md">
+                    <h2 class="text-lg font-semibold mb-2">All Text Tags</h2>
+                    <div id="tags-list" class="tags-list">
+                        <div id="loading-indicator" class="loading-indicator">
+                            <div class="spinner mr-2"></div>
+                            <span>Loading tags...</span>
+                        </div>
+                        <p id="no-tags-message" class="text-center py-6" style="display: none;">No text tags available</p>
+                        <div id="tags-items"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        <footer class="p-4 text-center text-sm">
+            <p>Navigate the map to find text tags</p>
+        </footer>
+    </div>
+    <script src="app.js" defer></script>
 </body>
 </html>
