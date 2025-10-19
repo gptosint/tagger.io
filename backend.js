@@ -53,11 +53,11 @@ app.post('/api/tags', (req, res) => {
 });
 
 // Delete all tags
-  app.delete('/api/tags', (req, res) => {
-    saveTags([]);
-    res.json({ success: true });
-  });
+app.delete('/api/tags', (req, res) => {
+  saveTags([]);
+  res.json({ success: true });
+});
 
-  app.listen(PORT, () => {
-    console.log(`Backend running at http://localhost:${PORT}/`);
-  });
+app.listen(PORT, () => {
+  console.log(`Backend running at http://localhost:${PORT}/`);
+});
