@@ -10,7 +10,9 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static(__dirname));
 app.use(bodyParser.json());
 
-const tagsFile = path.join(__dirname, 'tags.json');
+const tagsFile = process.env.TAGS_FILE
+  ? path.resolve(process.env.TAGS_FILE)
+  : path.join(__dirname, 'tags.json');
 
 // Helper: Load tags from file
 function loadTags() {
@@ -68,6 +70,12 @@ app.delete('/api/tags', (req, res) => {
   res.json({ success: true });
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend running at http://localhost:${PORT}/`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Backend running at http://localhost:${PORT}/`);
+  });
+}
+
+module.exports = {
+  app,
+};
