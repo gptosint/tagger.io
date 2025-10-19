@@ -3,11 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="description" content="Tagger.io — quick image and map tagging" />
+  <meta name="description" content="Tagger.io — map tagging with Mapbox (when available) or Leaflet fallback" />
   <title>Tagger.io — Map & Image Tagger</title>
 
-  <!-- Mapbox GL JS -->
+  <!-- Mapbox GL JS (optional; only used when token is provided) -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.20.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.20.0/mapbox-gl.js" defer></script>
+
+  <!-- Leaflet (fallback) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+  <!-- Replace %MAPBOX_TOKEN% during build/deploy with a secret. Do NOT commit a real token here. -->
+  <meta name="mapbox-token" content="%MAPBOX_TOKEN%">
 
   <style>
     :root{--accent:#0d6efd;--bg:#f8f9fa;--text:#222;--muted:#6c757d}
@@ -20,7 +28,7 @@
 
     main.grid{display:grid;grid-template-columns:1fr 360px;gap:16px;min-height:70vh;padding:16px 0}
     .panel{background:white;border:1px solid #e9ecef;padding:12px;border-radius:8px}
-    #map{width:100%;height:75vh;border-radius:8px;overflow:hidden}
+    #map{width:100%;height:75vh;border-radius:8px;overflow:hidden;position:relative}
 
     .controls{display:flex;flex-direction:column;gap:8px}
     .controls .row{display:flex;gap:8px}
@@ -34,29 +42,29 @@
     .no-js-warning{background:#fff3cd;color:#856404;padding:8px;border-radius:6px;margin:12px;text-align:center}
 
     /* popup input for tagging */
-    .tag-popup{position:absolute;background:white;border:1px solid #ddd;padding:8px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.12);z-index:1000}
-    .tag-popup input{padding:6px;border:1px solid #ced4da;border-radius:6px;width:200px}
+    .tag-popup{position:absolute;background:white;border:1px solid #ddd;padding:8px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.12);z-index:10000;display:flex;gap:8px;align-items:center}
+    .tag-popup input{padding:6px;border:1px solid #ced4da;border-radius:6px;width:180px}
   </style>
 </head>
 <body>
-  <header class="site-header">
+  <header class="site-header" role="banner">
     <div class="container inner">
       <div>
         <h1 class="site-title">Tagger.io</h1>
         <div class="site-subtitle">Tag places on the globe and export your tags</div>
       </div>
       <div>
-        <small class="site-subtitle">Map powered by Mapbox GL JS</small>
+        <small class="site-subtitle">Map powered by Mapbox GL JS (preferred) or Leaflet+OSM (fallback)</small>
       </div>
     </div>
   </header>
 
-  <main class="container grid">
-    <section class="panel">
-      <div id="map" title="Map - click to add a tag"></div>
+  <main class="container grid" role="main">
+    <section class="panel" aria-label="Map panel">
+      <div id="map" title="Map - click to add a tag" aria-hidden="false"></div>
     </section>
 
-    <aside class="panel">
+    <aside class="panel" aria-label="Tag controls">
       <h2 style="margin:0 0 8px 0">Tags</h2>
       <div class="controls">
         <div class="row">
@@ -67,7 +75,7 @@
           <button id="download-json" class="btn">Download JSON</button>
           <button id="clear-tags" class="btn">Clear Tags</button>
         </div>
-        <div style="font-size:.85rem;color:var(--muted);">Click on the globe to drop a tag while Add Mode is enabled. Use the list to manage tags.</div>
+        <div style="font-size:.85rem;color:var(--muted);">Click on the map to drop a tag while Add Mode is enabled. Use the list to manage tags.</div>
 
         <ul id="tags-list" class="tags-list" aria-live="polite"></ul>
       </div>
@@ -78,213 +86,313 @@
     <small>© Tagger.io — Map tagging demo</small>
   </footer>
 
-  <!-- Mapbox GL JS -->
-  <script src="https://api.mapbox.com/mapbox-gl-js/v2.20.0/mapbox-gl.js"></script>
+  <script>
+    (function () {
+      // Read token from meta tag first, then fallback to global variable.
+      const metaToken = document.querySelector('meta[name="mapbox-token"]')?.content || '';
+      const token = (metaToken && metaToken !== '%MAPBOX_TOKEN%') ? metaToken : (window.MAPBOX_ACCESS_TOKEN || '');
 
-  <script type="module">
-    // Mapbox token: replace with your token or set MAPBOX_ACCESS_TOKEN before serving
-    const MAPBOX_TOKEN = (window.MAPBOX_ACCESS_TOKEN || 'YOUR_MAPBOX_ACCESS_TOKEN');
-    if (!MAPBOX_TOKEN || MAPBOX_TOKEN === 'YOUR_MAPBOX_ACCESS_TOKEN') {
-      console.warn('Mapbox access token not set. Replace YOUR_MAPBOX_ACCESS_TOKEN with a valid token.');
-    }
+      // Shared state
+      const tags = [];
+      const markers = new Map(); // id -> marker object
+      let usingMapbox = false;
+      let mapboxMap = null;
+      let leafletMap = null;
 
-    mapboxgl.accessToken = MAPBOX_TOKEN;
+      const enableBtn = document.getElementById('enable-add');
+      const disableBtn = document.getElementById('disable-add');
+      const tagsListEl = document.getElementById('tags-list');
+      const downloadBtn = document.getElementById('download-json');
+      const clearBtn = document.getElementById('clear-tags');
 
-    // Initialize map with globe projection and sensible default
-    const map = new mapboxgl.Map({
-      container: 'map',
-      style: 'mapbox://styles/mapbox/satellite-streets-v11',
-      center: [0, 20],
-      zoom: 1.5,
-      projection: 'globe', // enable globe
-      pitch: 0
-    });
+      let addMode = false;
 
-    // Add navigation controls
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-    map.addControl(new mapboxgl.FullscreenControl());
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
 
-    // Add atmosphere/fog for globe effect when style loads
-    map.on('style.load', () => {
-      // Enable globe atmosphere (Mapbox GL JS >= 2.0)
-      if (map.setFog) {
-        map.setFog({
-          'range': [-1, 2],
-          'color': 'rgba(255,255,255,0.02)',
-          'high-color': 'rgba(255,255,255,0.15)'
+      function renderTags() {
+        tagsListEl.innerHTML = '';
+        tags.forEach((t) => {
+          const li = document.createElement('li');
+          li.className = 'tag-item';
+          const left = document.createElement('div');
+          left.innerHTML = `<strong>${escapeHtml(t.label)}</strong><div class="tag-meta">${t.lng.toFixed(5)}, ${t.lat.toFixed(5)}</div>`;
+          const actions = document.createElement('div');
+
+          const btnZoom = document.createElement('button');
+          btnZoom.className = 'btn';
+          btnZoom.textContent = 'Zoom';
+          btnZoom.addEventListener('click', () => {
+            if (usingMapbox && mapboxMap) {
+              mapboxMap.easeTo({ center: [t.lng, t.lat], zoom: 6, pitch: 45 });
+            } else if (leafletMap) {
+              leafletMap.setView([t.lat, t.lng], 6, { animate: true });
+            }
+          });
+
+          const btnDel = document.createElement('button');
+          btnDel.className = 'btn';
+          btnDel.style.marginLeft = '8px';
+          btnDel.textContent = 'Delete';
+          btnDel.addEventListener('click', () => removeTag(t.id));
+
+          actions.appendChild(btnZoom);
+          actions.appendChild(btnDel);
+          li.appendChild(left);
+          li.appendChild(actions);
+          tagsListEl.appendChild(li);
         });
       }
-    });
 
-    // Tagging state
-    let addMode = false;
-    const enableBtn = document.getElementById('enable-add');
-    const disableBtn = document.getElementById('disable-add');
-    const tagsListEl = document.getElementById('tags-list');
-    const downloadBtn = document.getElementById('download-json');
-    const clearBtn = document.getElementById('clear-tags');
+      function addTag(lng, lat, label) {
+        const id = 'tag-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        const t = { id, lng, lat, label: label || 'Tag' };
+        tags.push(t);
 
-    const tags = [];
-    const markers = new Map();
+        if (usingMapbox && mapboxMap && typeof mapboxgl !== 'undefined') {
+          const el = document.createElement('div');
+          el.className = 'marker';
+          el.style.width = '26px';
+          el.style.height = '26px';
+          el.style.borderRadius = '50%';
+          el.style.background = 'rgba(13,110,253,0.9)';
+          el.style.border = '2px solid white';
+          el.style.boxShadow = '0 1px 4px rgba(0,0,0,0.4)';
+          el.title = t.label;
 
-    function renderTags() {
-      tagsListEl.innerHTML = '';
-      tags.forEach((t) => {
-        const li = document.createElement('li');
-        li.className = 'tag-item';
-        const left = document.createElement('div');
-        left.innerHTML = `<strong>${escapeHtml(t.label)}</strong><div class="tag-meta">${t.lng.toFixed(5)}, ${t.lat.toFixed(5)}</div>`;
-        const actions = document.createElement('div');
-        const btnDel = document.createElement('button');
-        btnDel.className = 'btn';
-        btnDel.textContent = 'Delete';
-        btnDel.addEventListener('click', () => removeTag(t.id));
-        const btnZoom = document.createElement('button');
-        btnZoom.className = 'btn';
-        btnZoom.style.marginLeft = '8px';
-        btnZoom.textContent = 'Zoom';
-        btnZoom.addEventListener('click', () => {
-          map.easeTo({ center: [t.lng, t.lat], zoom: 6, pitch: 45 });
-        });
-        actions.appendChild(btnZoom);
-        actions.appendChild(btnDel);
-        li.appendChild(left);
-        li.appendChild(actions);
-        tagsListEl.appendChild(li);
-      });
-    }
+          const marker = new mapboxgl.Marker({ element: el }).setLngLat([t.lng, t.lat]).addTo(mapboxMap);
+          const popup = new mapboxgl.Popup({ offset: 12, closeButton: false })
+            .setHTML(`<strong>${escapeHtml(t.label)}</strong><div class="tag-meta">${t.lng.toFixed(5)}, ${t.lat.toFixed(5)}</div>`);
+          marker.setPopup(popup);
 
-    function addTag(lngLat, label) {
-      const id = 'tag-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
-      const t = { id, lng: lngLat.lng, lat: lngLat.lat, label: label || 'Tag' };
-      tags.push(t);
+          markers.set(id, marker);
+        } else if (leafletMap && typeof L !== 'undefined') {
+          const marker = L.circleMarker([t.lat, t.lng], {
+            radius: 8,
+            fillColor: '#0d6efd',
+            color: '#fff',
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.9
+          }).addTo(leafletMap);
 
-      // Create a marker with a small popup
-      const el = document.createElement('div');
-      el.className = 'marker';
-      el.style.width = '26px';
-      el.style.height = '26px';
-      el.style.borderRadius = '50%';
-      el.style.background = 'rgba(13,110,253,0.9)';
-      el.style.border = '2px solid white';
-      el.style.boxShadow = '0 1px 4px rgba(0,0,0,0.4)';
-      el.title = label;
+          marker.bindPopup(`<strong>${escapeHtml(t.label)}</strong><div class="tag-meta">${t.lng.toFixed(5)}, ${t.lat.toFixed(5)}</div>`);
+          markers.set(id, marker);
+        }
 
-      const marker = new mapboxgl.Marker({ element: el }).setLngLat([t.lng, t.lat]).addTo(map);
-
-      const popup = new mapboxgl.Popup({ offset: 12, closeButton: false }).setHTML(`<strong>${escapeHtml(t.label)}</strong><div class="tag-meta">${t.lng.toFixed(5)}, ${t.lat.toFixed(5)}</div>`);
-      marker.setPopup(popup);
-
-      markers.set(t.id, marker);
-      renderTags();
-    }
-
-    function removeTag(id) {
-      const idx = tags.findIndex(x => x.id === id);
-      if (idx !== -1) {
-        tags.splice(idx, 1);
+        renderTags();
       }
-      const m = markers.get(id);
-      if (m) {
-        m.remove();
-        markers.delete(id);
+
+      function removeTag(id) {
+        const idx = tags.findIndex(x => x.id === id);
+        if (idx !== -1) tags.splice(idx, 1);
+
+        const m = markers.get(id);
+        if (m) {
+          // Mapbox marker has remove(), Leaflet marker also has remove()
+          try { m.remove(); } catch (err) { /* ignore */ }
+          markers.delete(id);
+        }
+
+        renderTags();
       }
-      renderTags();
-    }
 
-    function clearAllTags() {
-      tags.slice().forEach(t => removeTag(t.id));
-    }
+      function clearAllTags() {
+        // copy to avoid modification while iterating
+        tags.slice().forEach(t => removeTag(t.id));
+      }
 
-    // map click handler to add tag
-    map.on('click', (e) => {
-      if (!addMode) return;
-      const lngLat = e.lngLat;
+      function showTagPopupAt(pointX, pointY, lng, lat) {
+        // remove existing
+        const existing = document.querySelector('.tag-popup');
+        if (existing) existing.remove();
 
-      // Show a small floating input near the click location on the map container
-      showTagPopup(e.point, lngLat);
-    });
+        const popup = document.createElement('div');
+        popup.className = 'tag-popup';
 
-    function showTagPopup(point, lngLat) {
-      // remove any existing popup input
-      const existing = document.querySelector('.tag-popup');
-      if (existing) existing.remove();
+        // position relative to map container
+        const mapEl = document.getElementById('map');
+        const rect = mapEl.getBoundingClientRect();
+        const left = Math.min(rect.left + pointX, window.innerWidth - 260);
+        const top = Math.max(rect.top + pointY - 10, 10);
+        popup.style.left = `${left}px`;
+        popup.style.top = `${top}px`;
 
-      const popup = document.createElement('div');
-      popup.className = 'tag-popup';
-      popup.style.left = Math.min(point.x, window.innerWidth - 260) + 'px';
-      popup.style.top = Math.max(point.y - 10, 10) + 'px';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Enter tag label';
 
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.placeholder = 'Enter tag label';
-      popup.appendChild(input);
-
-      const btnOk = document.createElement('button');
-      btnOk.className = 'btn primary';
-      btnOk.style.marginLeft = '8px';
-      btnOk.textContent = 'Add';
-      btnOk.addEventListener('click', () => {
-        const label = input.value.trim() || 'Tag';
-        addTag(lngLat, label);
-        popup.remove();
-      });
-
-      const btnCancel = document.createElement('button');
-      btnCancel.className = 'btn';
-      btnCancel.style.marginLeft = '8px';
-      btnCancel.textContent = 'Cancel';
-      btnCancel.addEventListener('click', () => popup.remove());
-
-      popup.appendChild(btnOk);
-      popup.appendChild(btnCancel);
-
-      document.body.appendChild(popup);
-      input.focus();
-
-      // close when clicking outside
-      function onDoc(e) {
-        if (!popup.contains(e.target)) {
+        const btnOk = document.createElement('button');
+        btnOk.className = 'btn primary';
+        btnOk.textContent = 'Add';
+        btnOk.addEventListener('click', () => {
+          const label = input.value.trim() || 'Tag';
+          addTag(lng, lat, label);
           popup.remove();
-          document.removeEventListener('mousedown', onDoc);
+        });
+
+        const btnCancel = document.createElement('button');
+        btnCancel.className = 'btn';
+        btnCancel.textContent = 'Cancel';
+        btnCancel.addEventListener('click', () => popup.remove());
+
+        popup.appendChild(input);
+        popup.appendChild(btnOk);
+        popup.appendChild(btnCancel);
+
+        document.body.appendChild(popup);
+        input.focus();
+
+        function onDocClick(e) {
+          if (!popup.contains(e.target)) {
+            popup.remove();
+            document.removeEventListener('mousedown', onDocClick);
+          }
+        }
+        document.addEventListener('mousedown', onDocClick);
+      }
+
+      // Map initialization
+      function initMapbox(token) {
+        try {
+          mapboxgl.accessToken = token;
+          mapboxMap = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/satellite-streets-v11',
+            center: [0, 20],
+            zoom: 1.5,
+            projection: 'globe',
+            pitch: 0
+          });
+
+          mapboxMap.on('load', () => {
+            if (mapboxMap.setFog) {
+              mapboxMap.setFog({
+                'range': [-1, 2],
+                'color': 'rgba(255,255,255,0.02)',
+                'high-color': 'rgba(255,255,255,0.15)'
+              });
+            }
+          });
+
+          mapboxMap.addControl(new mapboxgl.NavigationControl(), 'top-right');
+          mapboxMap.addControl(new mapboxgl.FullscreenControl());
+
+          mapboxMap.on('click', (e) => {
+            if (!addMode) return;
+            // e.point is a Point with x,y relative to map container
+            const p = e.point;
+            showTagPopupAt(p.x, p.y, e.lngLat.lng, e.lngLat.lat);
+          });
+
+          usingMapbox = true;
+        } catch (err) {
+          console.warn('Mapbox initialization failed, falling back to Leaflet:', err);
+          initLeaflet();
         }
       }
-      document.addEventListener('mousedown', onDoc);
-    }
 
-    enableBtn.addEventListener('click', () => {
-      addMode = true;
-      enableBtn.disabled = true;
-      disableBtn.disabled = false;
-      enableBtn.textContent = 'Add Mode: ON';
-    });
-    disableBtn.addEventListener('click', () => {
-      addMode = false;
-      enableBtn.disabled = false;
+      function initLeaflet() {
+        try {
+          const mapEl = document.getElementById('map');
+          leafletMap = L.map(mapEl).setView([20, 0], 2);
+
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+          }).addTo(leafletMap);
+
+          leafletMap.on('click', (e) => {
+            if (!addMode) return;
+            // e.containerPoint is an object with x,y relative to container
+            const p = e.containerPoint;
+            showTagPopupAt(p.x, p.y, e.latlng.lng, e.latlng.lat);
+          });
+
+          usingMapbox = false;
+        } catch (err) {
+          console.error('Leaflet initialization failed. Map will not be available.', err);
+        }
+      }
+
+      // Buttons
+      enableBtn.addEventListener('click', () => {
+        addMode = true;
+        enableBtn.disabled = true;
+        disableBtn.disabled = false;
+        enableBtn.textContent = 'Add Mode: ON';
+      });
+
+      disableBtn.addEventListener('click', () => {
+        addMode = false;
+        enableBtn.disabled = false;
+        disableBtn.disabled = true;
+        enableBtn.textContent = 'Enable Add Mode';
+        const p = document.querySelector('.tag-popup'); if (p) p.remove();
+      });
+
+      // initial state
       disableBtn.disabled = true;
-      enableBtn.textContent = 'Enable Add Mode';
-      // remove any popup input
-      const p = document.querySelector('.tag-popup'); if (p) p.remove();
-    });
 
-    // initialize buttons state
-    disableBtn.disabled = true;
+      downloadBtn.addEventListener('click', () => {
+        const payload = { created_at: new Date().toISOString(), tags: tags.slice() };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'map-tags.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
 
-    downloadBtn.addEventListener('click', () => {
-      const payload = { created_at: new Date().toISOString(), tags: tags.slice() };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'map-tags.json';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    });
+      clearBtn.addEventListener('click', () => {
+        if (!confirm('Clear all tags?')) return;
+        clearAllTags();
+      });
 
-    clearBtn.addEventListener('click', () => {
-      if (!confirm('Clear all tags?')) return;
-      clearAllTags();
-    });
+      // Start appropriate map engine
+      // Prefer Mapbox when we have both a token and the mapboxgl library loaded.
+      // If mapboxgl was loaded with defer, it should be available by now; otherwise fallback to Leaflet.
+      const hasMapboxLib = typeof mapboxgl !== 'undefined';
+      if (token && token.length > 0 && hasMapboxLib) {
+        initMapbox(token);
+      } else {
+        // If a token is present but mapboxlib not loaded yet, still attempt when ready.
+        if (token && token.length > 0 && !hasMapboxLib) {
+          // try to wait for mapbox script to load (if it's present with defer) up to a short timeout
+          let tries = 0;
+          const maxTries = 20;
+          const iv = setInterval(() => {
+            if (typeof mapboxgl !== 'undefined') {
+              clearInterval(iv);
+              initMapbox(token);
+            } else if (++tries >= maxTries) {
+              clearInterval(iv);
+              initLeaflet();
+            }
+          }, 150);
+        } else {
+          initLeaflet();
+        }
+      }
 
-    // simple HTML escaping
-    function escapeHtml(s){ return String(s).replace(/[&<>\
+      // Expose for debugging
+      window.__Tagger = {
+        get state() { return { engine: usingMapbox ? 'mapbox' : 'leaflet', tags: tags.slice() }; },
+        addTagManual(lng, lat, label) { addTag(lng, lat, label); },
+        removeTag
+      };
+    })();
+  </script>
+
+  <noscript>
+    <div class="no-js-warning">This app requires JavaScript to work. Please enable JavaScript in your browser.</div>
+  </noscript>
+</body>
+</html>
