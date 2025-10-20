@@ -14,8 +14,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
-  <!-- Replace %MAPBOX_TOKEN% during build/deploy with a secret. Do NOT commit a real token here. -->
-  <meta name="mapbox-token" content="%MAPBOX_TOKEN%">
+  <meta name="mapbox-token" content="pk.eyJ1IjoiaHViaWdhZ2EiLCJhIjoiY21lZW1yNXk2MGVuZzJucXdiaXo4OXB2NiJ9.Oj5Qv049NGjIXHNx4Zo2SQ">
 
   <style>
     :root{--accent:#0d6efd;--bg:#f8f9fa;--text:#222;--muted:#6c757d}
@@ -264,7 +263,7 @@
           mapboxgl.accessToken = token;
           mapboxMap = new mapboxgl.Map({
             container: 'map',
-            style: 'mapbox://styles/mapbox/satellite-streets-v11',
+            style: 'mapbox://styles/hubigaga/clre95zh8008s01pfeg2j2dpo',
             center: [0, 20],
             zoom: 1.5,
             projection: 'globe',
