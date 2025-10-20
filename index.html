@@ -8,7 +8,7 @@
 
   <!-- Mapbox GL JS (optional; only used when token is provided) -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.20.0/mapbox-gl.css" rel="stylesheet" />
-  <script src="https://api.mapbox.com/mapbox-gl-js/v2.20.0/mapbox-gl.js" defer></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.20.0/mapbox-gl.js"></script>
 
   <!-- Leaflet (fallback) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
@@ -29,8 +29,6 @@
     .panel{background:white;border:1px solid #e9ecef;padding:12px;border-radius:8px}
     #map{width:100%;height:75vh;border-radius:8px;overflow:hidden;position:relative}
 
-    .controls{display:flex;flex-direction:column;gap:8px}
-    .controls .row{display:flex;gap:8px}
     .btn{padding:8px 10px;border-radius:6px;border:1px solid #ced4da;background:white;cursor:pointer}
     .btn.primary{background:var(--accent);color:white;border-color:transparent}
 
@@ -65,19 +63,8 @@
 
     <aside class="panel" aria-label="Tag controls">
       <h2 style="margin:0 0 8px 0">Tags</h2>
-      <div class="controls">
-        <div class="row">
-          <button id="enable-add" class="btn primary">Enable Add Mode</button>
-          <button id="disable-add" class="btn">Disable</button>
-        </div>
-        <div class="row">
-          <button id="download-json" class="btn">Download JSON</button>
-          <button id="clear-tags" class="btn">Clear Tags</button>
-        </div>
-        <div style="font-size:.85rem;color:var(--muted);">Click on the map to drop a tag while Add Mode is enabled. Use the list to manage tags.</div>
-
-        <ul id="tags-list" class="tags-list" aria-live="polite"></ul>
-      </div>
+      <div style="font-size:.9rem;color:var(--muted);">Click anywhere on the map to drop a tag. Manage existing tags below.</div>
+      <ul id="tags-list" class="tags-list" aria-live="polite"></ul>
     </aside>
   </main>
 
@@ -98,13 +85,7 @@
       let mapboxMap = null;
       let leafletMap = null;
 
-      const enableBtn = document.getElementById('enable-add');
-      const disableBtn = document.getElementById('disable-add');
       const tagsListEl = document.getElementById('tags-list');
-      const downloadBtn = document.getElementById('download-json');
-      const clearBtn = document.getElementById('clear-tags');
-
-      let addMode = false;
 
       function escapeHtml(str) {
         return String(str)
@@ -202,11 +183,6 @@
         renderTags();
       }
 
-      function clearAllTags() {
-        // copy to avoid modification while iterating
-        tags.slice().forEach(t => removeTag(t.id));
-      }
-
       function showTagPopupAt(pointX, pointY, lng, lat) {
         // remove existing
         const existing = document.querySelector('.tag-popup');
@@ -284,7 +260,6 @@
           mapboxMap.addControl(new mapboxgl.FullscreenControl());
 
           mapboxMap.on('click', (e) => {
-            if (!addMode) return;
             // e.point is a Point with x,y relative to map container
             const p = e.point;
             showTagPopupAt(p.x, p.y, e.lngLat.lng, e.lngLat.lat);
@@ -308,7 +283,6 @@
           }).addTo(leafletMap);
 
           leafletMap.on('click', (e) => {
-            if (!addMode) return;
             // e.containerPoint is an object with x,y relative to container
             const p = e.containerPoint;
             showTagPopupAt(p.x, p.y, e.latlng.lng, e.latlng.lat);
@@ -320,51 +294,17 @@
         }
       }
 
-      // Buttons
-      enableBtn.addEventListener('click', () => {
-        addMode = true;
-        enableBtn.disabled = true;
-        disableBtn.disabled = false;
-        enableBtn.textContent = 'Add Mode: ON';
-      });
-
-      disableBtn.addEventListener('click', () => {
-        addMode = false;
-        enableBtn.disabled = false;
-        disableBtn.disabled = true;
-        enableBtn.textContent = 'Enable Add Mode';
-        const p = document.querySelector('.tag-popup'); if (p) p.remove();
-      });
-
-      // initial state
-      disableBtn.disabled = true;
-
-      downloadBtn.addEventListener('click', () => {
-        const payload = { created_at: new Date().toISOString(), tags: tags.slice() };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'map-tags.json';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      });
-
-      clearBtn.addEventListener('click', () => {
-        if (!confirm('Clear all tags?')) return;
-        clearAllTags();
-      });
-
       // Start appropriate map engine
       // Prefer Mapbox when we have both a token and the mapboxgl library loaded.
-      // If mapboxgl was loaded with defer, it should be available by now; otherwise fallback to Leaflet.
+      // The Mapbox bundle is requested ahead of this script, but we still guard against
+      // environments where it fails to load (e.g., blocked network) and fall back to Leaflet.
       const hasMapboxLib = typeof mapboxgl !== 'undefined';
       if (token && token.length > 0 && hasMapboxLib) {
         initMapbox(token);
       } else {
         // If a token is present but mapboxlib not loaded yet, still attempt when ready.
         if (token && token.length > 0 && !hasMapboxLib) {
-          // try to wait for mapbox script to load (if it's present with defer) up to a short timeout
+          // Try to wait briefly for the Mapbox script to finish loading before falling back.
           let tries = 0;
           const maxTries = 20;
           const iv = setInterval(() => {
